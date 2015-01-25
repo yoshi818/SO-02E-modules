@@ -826,6 +826,10 @@ static int cpufreq_governor_smartass_h3(struct cpufreq_policy *new_policy,
 			pcpu = &per_cpu(smartass_info, j);
 			pcpu->cur_policy = new_policy;
 			pcpu->enable = 1;
+			smartass_update_min_max(pcpu, new_policy, suspended);
+			pcpu->freq_table = cpufreq_frequency_get_table(cpu);
+			if (!pcpu->freq_table)
+				printk(KERN_WARNING "Smartass: no frequency table for cpu %d?!\n",cpu);
 			smp_wmb();
 		}
 
@@ -848,7 +852,7 @@ static int cpufreq_governor_smartass_h3(struct cpufreq_policy *new_policy,
 		for_each_cpu(j, new_policy->cpus) {
 			pcpu = &per_cpu(smartass_info, j);
 			if (pcpu->cur_policy->cur < new_policy->max && !timer_pending(&pcpu->timer))
-			reset_timer(j, pcpu);
+				reset_timer(j, pcpu);
 		}
 
 		if (rc)
@@ -888,7 +892,7 @@ static int cpufreq_governor_smartass_h3(struct cpufreq_policy *new_policy,
 	
 		for_each_cpu(j, new_policy->cpus) {
 			pcpu = &per_cpu(smartass_info, j);
-			smartass_update_min_max(pcpu,new_policy,suspended);
+			smartass_update_min_max(pcpu, new_policy, suspended);
 			
 			if (pcpu->cur_policy->cur > new_policy->max) {
 				dprintk(SMARTASS_DEBUG_JUMPS,"SmartassI: jumping to new max freq: %d\n",new_policy->max);
@@ -924,28 +928,28 @@ static int cpufreq_governor_smartass_h3(struct cpufreq_policy *new_policy,
 
 	case CPUFREQ_GOV_STOP:
 		for_each_cpu(j, new_policy->cpus) {
-				pcpu = &per_cpu(smartass_info, j);
-				pcpu->enable = 0;
-				smp_wmb();
-				del_timer_sync(&pcpu->timer);
-				flush_work(&freq_scale_work);
-				/*
-				 * Reset idle exit time since we may cancel the timer
-				 * before it can run after the last idle exit time,
-				 * to avoid tripping the check in idle exit for a timer
-				 * that is trying to run.
-				 */
-				pcpu->idle_exit_time = 0;
-			}
+			pcpu = &per_cpu(smartass_info, j);
+			pcpu->enable = 0;
+			smp_wmb();
+			del_timer_sync(&pcpu->timer);
+			flush_work(&freq_scale_work);
+			/*
+			 * Reset idle exit time since we may cancel the timer
+			 * before it can run after the last idle exit time,
+			 * to avoid tripping the check in idle exit for a timer
+			 * that is trying to run.
+			 */
+			pcpu->idle_exit_time = 0;
+		}
 
-			if (atomic_dec_return(&active_count) > 0)
-				return 0;
+		if (atomic_dec_return(&active_count) > 0)
+			return 0;
 
-			sysfs_remove_group(cpufreq_global_kobject,
-					&smartass_attr_group);
+		sysfs_remove_group(cpufreq_global_kobject,
+			&smartass_attr_group);
 					
-			pm_idle = pm_idle_old;
-
+		pm_idle = pm_idle_old;
+		idle_notifier_unregister(&cpufreq_idle_nb);
 
 //		this_smartass->enable = 0;
 //		smp_wmb();
@@ -974,9 +978,9 @@ static void smartass_suspend(int cpu, int suspend)
 	if (!this_smartass->enable)
 		return;
 
-	smartass_update_min_max(this_smartass,policy,suspend);
+	smartass_update_min_max(this_smartass, policy, suspend);
 	if (!suspend) { // resume at max speed:
-		new_freq = validate_freq(policy,sleep_wakeup_freq);
+		new_freq = validate_freq(policy, sleep_wakeup_freq);
 
 		dprintk(SMARTASS_DEBUG_JUMPS,"SmartassS: awaking at %d\n",new_freq);
 		__cpufreq_driver_target(policy, new_freq,
